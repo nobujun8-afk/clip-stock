@@ -38,6 +38,12 @@
   .empty { text-align:center; color:var(--sub); padding:40px 0; }
   .note { font-size:12px; color:var(--sub); }
   .embed { margin-top:8px; }
+  .preview { display:flex; gap:10px; margin:8px 0; cursor:pointer; }
+  .thumb { flex:none; width:96px; height:96px; border-radius:8px; background:var(--chip) center/cover no-repeat; position:relative; }
+  .thumb::after { content:"▶"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:22px; text-shadow:0 0 6px rgba(0,0,0,.7); }
+  .preview .author { font-size:13px; font-weight:600; }
+  .preview .author span { font-weight:400; color:var(--sub); }
+  .preview .text { font-size:14px; margin-top:2px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 </style>
 </head>
 <body>
@@ -65,7 +71,7 @@
     <button class="primary" type="submit">保存</button>
   </form>
 
-  <input id="search" type="search" placeholder="メモ・タグで検索" style="margin-bottom:8px">
+  <input id="search" type="search" placeholder="メモ・タグ・投稿の本文で検索" style="margin-bottom:8px">
   <div id="filters" class="chips"></div>
   <div id="list"></div>
 </main>
@@ -140,10 +146,11 @@ function render(all) {
   const q = $("search").value.trim().toLowerCase();
   const shown = clips.filter((c) =>
     (filter === "すべて" || (filter === "未視聴" ? !c.watched : c.category === filter)) &&
-    (!q || `${c.memo} ${(c.tags || []).join(" ")} ${c.url}`.toLowerCase().includes(q)));
+    (!q || `${c.memo} ${(c.tags || []).join(" ")} ${c.url} ${c.preview?.author || ""} ${c.preview?.text || ""}`.toLowerCase().includes(q)));
   $("list").innerHTML = shown.length ? shown.map((c) => `
     <div class="card clip ${c.watched ? "watched" : ""}" data-id="${c.id}">
       <div><span class="badge">${esc(c.category)}</span>${(c.tags || []).map((t) => `<span class="badge">#${esc(t)}</span>`).join("")}</div>
+      ${previewHtml(c)}
       ${c.memo ? `<div class="memo">${esc(c.memo)}</div>` : ""}
       <div class="meta">${new Date(c.createdAt).toLocaleString("ja-JP")}${c.watched ? " ・ 視聴済み" : ""}</div>
       <div class="actions">
@@ -155,6 +162,59 @@ function render(all) {
       </div>
       <div class="embed"></div>
     </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
+  shown.filter((c) => !c.preview).forEach(backfillPreview);
+}
+
+// ---- 投稿の中身（投稿者・本文・サムネイル）を取得 ----
+function previewHtml(c) {
+  const p = c.preview;
+  if (!p) {
+    const msg = previewFailed.has(c.id) ? "投稿の内容を取得できませんでした（▶で再生はできます）" : "投稿の内容を読み込み中…";
+    return `<div class="preview" data-act="play"><div class="thumb" data-act="play"></div><div class="text note" data-act="play">${msg}</div></div>`;
+  }
+  return `<div class="preview" data-act="play">
+      <div class="thumb" data-act="play" ${p.thumb ? `style="background-image:url('${esc(p.thumb)}')"` : ""}></div>
+      <div data-act="play">
+        <div class="author" data-act="play">${esc(p.author)} <span>@${esc(p.handle)}</span></div>
+        <div class="text" data-act="play">${esc(p.text) || "（本文なし）"}</div>
+      </div>
+    </div>`;
+}
+
+// まず FxTwitter（サムネイル付き）、だめなら X 公式の oEmbed（本文のみ）から取る
+async function fetchPreview(url) {
+  const [, handle, id] = url.match(/x\.com\/([^/]+)\/status\/(\d+)/);
+  try {
+    const res = await fetch(`https://api.fxtwitter.com/${handle}/status/${id}`);
+    const t = (await res.json()).tweet;
+    if (t) {
+      const m = t.media?.all?.[0];
+      return {
+        author: t.author?.name || handle,
+        handle: t.author?.screen_name || handle,
+        text: (t.text || "").slice(0, 280),
+        thumb: m?.thumbnail_url || m?.url || "",
+      };
+    }
+  } catch {}
+  const data = await new Promise((resolve, reject) => {
+    const cb = `oembed_${id}`;
+    const s = document.createElement("script");
+    window[cb] = (d) => { delete window[cb]; s.remove(); resolve(d); };
+    s.onerror = () => { delete window[cb]; s.remove(); reject(new Error("oEmbed")); };
+    s.src = `https://publish.twitter.com/oembed?omit_script=1&url=${encodeURIComponent(url)}&callback=${cb}`;
+    document.head.appendChild(s);
+  });
+  const doc = new DOMParser().parseFromString(data.html, "text/html");
+  return { author: data.author_name || handle, handle, text: (doc.querySelector("p")?.textContent || "").slice(0, 280), thumb: "" };
+}
+
+const previewTried = new Set();
+const previewFailed = new Set();
+async function backfillPreview(c) {
+  if (previewTried.has(c.id)) return;
+  previewTried.add(c.id);
+  try { await store.update(c.id, { preview: await fetchPreview(c.url) }); } catch (err) { console.warn("preview", err); previewFailed.add(c.id); render(clips); }
 }
 
 function loadWidgets() {
@@ -168,7 +228,7 @@ function loadWidgets() {
 }
 
 $("list").addEventListener("click", async (e) => {
-  const act = e.target.dataset.act;
+  const act = e.target.closest("[data-act]")?.dataset.act;
   const card = e.target.closest(".clip");
   if (!act || !card) return;
   const c = clips.find((x) => x.id === card.dataset.id);
