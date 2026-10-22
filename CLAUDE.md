@@ -1,0 +1,27 @@
+# クリップストック
+
+サッカーコーチ向けに、X で見つけた練習メニュー・戦術などの動画を分類して保存・見返す Web アプリ（PWA）。
+利用者は日本語話者で、プログラミングには詳しくない。説明は日本語で、専門用語はかみ砕いて書く。
+
+## 構成
+- `index.html` にアプリのすべて（HTML / CSS / JavaScript）。ビルド不要。
+- 公開：GitHub Pages（`main` ブランチの root）→ https://nobujun8-afk.github.io/clip-stock/
+  `main` に push すると 1〜2 分で公開される。
+- 保存と同期：Firebase（無料の Spark プラン、プロジェクト ID `clip-stock`）。Google ログイン + Firestore。
+  データは `users/{uid}/clips/{id}`。アクセスルールは `firestore.rules`（本人のみ読み書き）。
+  `firebase-config.js` が空だと端末のみ（localStorage）で動く。
+- 再生は X 公式の埋め込み（widgets.js）。動画ファイルはダウンロードせずリンクだけ保存する。
+- サムネイル・本文は FxTwitter（api.fxtwitter.com）から取得し、だめなら X の oEmbed（JSONP）で本文だけ取る。
+- iPhone のショートカット「クリップに保存」が `?url=<投稿URL>` 付きでアプリを開く。
+  `?url=` 付きで開いたときだけ保存フォームを上に出し、普通に開いたときは一覧を上に出す。
+
+## 仕様メモ
+- 分類は 5 つ固定：練習メニュー / 戦術 / 個人技術 / 身体操作 / その他（`CATEGORIES`）。
+- 分類はボタンで選ぶ。タグはスペース区切りで、よく使うタグは候補ボタンで出す。
+- 保存後に分類・タグ・メモを変更できる。視聴済み / 未視聴の管理と検索がある。
+- お金がかからないことが前提。有料サービスや有料プランが必要な変更は事前に相談する。
+
+## 確認方法
+- 作業環境からは X / Firebase / FxTwitter / github.io に接続できないことが多い。
+  ローカルで `python3 -m http.server` を立て、Playwright（Chromium は /opt/pw-browsers/chromium）で
+  外部通信をモックして画面と動作を確認する。実機での確認は利用者にお願いする。
