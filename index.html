@@ -27,6 +27,7 @@
   .primary { width:100%; margin-top:10px; padding:11px; font-size:16px; font-weight:600; background:var(--accent); color:#fff; border:0; border-radius:8px; }
   .chips { display:flex; gap:6px; overflow-x:auto; padding:2px 0 8px; }
   .chip { flex:none; border:1px solid var(--line); background:var(--chip); color:var(--text); border-radius:999px; padding:6px 12px; font-size:14px; }
+  .cats { display:flex; flex-wrap:wrap; gap:6px; }
   .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .row { display:flex; gap:8px; align-items:center; }
   .clip .meta { font-size:12px; color:var(--sub); }
@@ -56,14 +57,13 @@
   <form id="addForm" class="card">
     <label for="url">X の投稿URL</label>
     <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
-    <div class="row">
-      <div style="flex:1">
-        <label for="category">分類</label>
-        <select id="category"></select>
-      </div>
-      <div style="flex:1">
+    <label>分類</label>
+    <div id="category" class="cats"></div>
+    <div>
+      <div>
         <label for="tags">タグ（スペース区切り）</label>
         <input id="tags" placeholder="U-12 守備">
+        <div id="tagSuggest" class="chips" style="padding-top:6px"></div>
       </div>
     </div>
     <label for="memo">メモ</label>
@@ -132,6 +132,35 @@ function normalizeUrl(raw) {
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
+// ---- 分類ボタン・タグ候補（保存フォーム） ----
+let selectedCategory = CATEGORIES[0];
+const parseTags = (text) => [...new Set(text.split(/[\s　,、]+/).filter(Boolean))];
+
+function renderCategoryButtons() {
+  $("category").innerHTML = CATEGORIES.map((n) =>
+    `<button type="button" class="chip ${n === selectedCategory ? "on" : ""}" data-cat="${n}">${n}</button>`).join("");
+}
+$("category").addEventListener("click", (e) => {
+  if (e.target.dataset.cat) { selectedCategory = e.target.dataset.cat; renderCategoryButtons(); }
+});
+
+// これまでに使ったタグを、よく使う順にボタンで出す（押すとタグ欄に追加）
+function renderTagSuggest() {
+  const count = {};
+  clips.forEach((c) => (c.tags || []).forEach((t) => { count[t] = (count[t] || 0) + 1; }));
+  const current = parseTags($("tags").value);
+  $("tagSuggest").innerHTML = Object.keys(count).filter((t) => !current.includes(t))
+    .sort((a, b) => count[b] - count[a]).slice(0, 15)
+    .map((t) => `<button type="button" class="chip" data-tag="${esc(t)}">#${esc(t)}</button>`).join("");
+}
+$("tagSuggest").addEventListener("click", (e) => {
+  const t = e.target.dataset.tag;
+  if (!t) return;
+  $("tags").value = [...parseTags($("tags").value), t].join(" ");
+  renderTagSuggest();
+});
+$("tags").addEventListener("input", renderTagSuggest);
+
 function renderFilters() {
   const names = ["すべて", ...CATEGORIES, "未視聴"];
   $("filters").innerHTML = names.map((n) => {
@@ -143,6 +172,7 @@ function renderFilters() {
 function render(all) {
   clips = all;
   renderFilters();
+  renderTagSuggest();
   const q = $("search").value.trim().toLowerCase();
   const shown = clips.filter((c) =>
     (filter === "すべて" || (filter === "未視聴" ? !c.watched : c.category === filter)) &&
@@ -157,6 +187,7 @@ function render(all) {
         <button data-act="play">▶ 再生</button>
         <a href="${esc(c.url)}" target="_blank" rel="noopener">Xで開く</a>
         <button data-act="watched">${c.watched ? "未視聴に戻す" : "視聴済みにする"}</button>
+        <button data-act="tags">タグ編集</button>
         <button data-act="edit">メモ編集</button>
         <button data-act="delete">削除</button>
       </div>
@@ -239,6 +270,10 @@ $("list").addEventListener("click", async (e) => {
     (await loadWidgets()).widgets.load(box);
   }
   if (act === "watched") await store.update(c.id, { watched: !c.watched });
+  if (act === "tags") {
+    const input = prompt("タグ（スペース区切り）", (c.tags || []).join(" "));
+    if (input !== null) await store.update(c.id, { tags: parseTags(input) });
+  }
   if (act === "edit") {
     const memo = prompt("メモ", c.memo || "");
     if (memo !== null) await store.update(c.id, { memo });
@@ -258,18 +293,20 @@ $("addForm").addEventListener("submit", async (e) => {
   if (clips.some((c) => c.url === url)) return alert("このクリップは保存済みです");
   await store.add({
     url,
-    category: $("category").value,
-    tags: $("tags").value.split(/[\s　,、]+/).filter(Boolean),
+    category: selectedCategory,
+    tags: parseTags($("tags").value),
     memo: $("memo").value.trim(),
     watched: false,
     createdAt: Date.now(),
   });
   e.target.reset();
+  selectedCategory = CATEGORIES[0];
+  renderCategoryButtons();
   history.replaceState(null, "", location.pathname);
 });
 
 // ---- 起動 ----
-$("category").innerHTML = CATEGORIES.map((c) => `<option>${c}</option>`).join("");
+renderCategoryButtons();
 // iPhone のショートカットから ?url=... 付きで開かれたら入力欄に入れる
 const params = new URLSearchParams(location.search);
 const shared = params.get("url") || params.get("text");
