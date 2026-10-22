@@ -58,7 +58,7 @@
 <main>
   <button id="openForm" type="button" class="primary" style="margin:0 0 12px">＋ URL を貼ってクリップを追加</button>
   <form id="addForm" class="card" hidden>
-    <label for="url">X の投稿URL</label>
+    <label for="url">X / Instagram の投稿URL</label>
     <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
     <label>分類</label>
     <div id="category" class="cats"></div>
@@ -130,7 +130,11 @@ async function firebaseStore() {
 }
 
 // ---- 画面 ----
+const isInstagram = (url) => url.includes("instagram.com/");
 function normalizeUrl(raw) {
+  // Instagram の投稿・リール（共有用の ?igsh= などは捨てて、投稿の ID だけ残す）
+  const ig = String(raw).match(/https?:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(p|reel|reels|tv)\/([\w-]+)/);
+  if (ig) return `https://www.instagram.com/${ig[1] === "p" ? "p" : "reel"}/${ig[2]}/`;
   const m = String(raw).match(/https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/([^/?#]+)\/status\/(\d+)/);
   return m ? `https://x.com/${m[1]}/status/${m[2]}` : null;
 }
@@ -189,7 +193,7 @@ function render(all) {
       <div class="meta">${new Date(c.createdAt).toLocaleString("ja-JP")}${c.watched ? " ・ 視聴済み" : ""}</div>
       <div class="actions">
         <button data-act="play">▶ 再生</button>
-        <a href="${esc(c.url)}" target="_blank" rel="noopener">Xで開く</a>
+        <a href="${esc(c.url)}" target="_blank" rel="noopener">${isInstagram(c.url) ? "Instagramで開く" : "Xで開く"}</a>
         <button data-act="watched">${c.watched ? "未視聴に戻す" : "視聴済みにする"}</button>
         <button data-act="cat">分類変更</button>
         <button data-act="tags">タグ編集</button>
@@ -200,11 +204,14 @@ function render(all) {
         `<button type="button" class="chip ${n === c.category ? "on" : ""}" data-act="setcat" data-cat="${n}">${n}</button>`).join("")}</div>
       <div class="embed"></div>
     </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
-  shown.filter((c) => !c.preview).forEach(backfillPreview);
+  shown.filter((c) => !c.preview && !isInstagram(c.url)).forEach(backfillPreview);
 }
 
 // ---- 投稿の中身（投稿者・本文・サムネイル）を取得 ----
 function previewHtml(c) {
+  if (isInstagram(c.url)) {
+    return `<div class="preview" data-act="play"><div class="thumb" data-act="play"></div><div class="text note" data-act="play">Instagram の投稿（▶で再生。内容はメモに書いておくと探しやすいです）</div></div>`;
+  }
   const p = c.preview;
   if (!p) {
     const msg = previewFailed.has(c.id) ? "投稿の内容を取得できませんでした（▶で再生はできます）" : "投稿の内容を読み込み中…";
@@ -273,6 +280,15 @@ $("list").addEventListener("click", async (e) => {
   if (act === "play") {
     const box = card.querySelector(".embed");
     if (box.childElementCount) { box.innerHTML = ""; return; }
+    if (isInstagram(c.url)) {
+      const f = document.createElement("iframe");
+      f.src = `${c.url}embed/`;
+      f.loading = "lazy";
+      f.allowFullscreen = true;
+      f.style.cssText = "width:100%;height:600px;border:0;border-radius:8px;background:#fff";
+      box.appendChild(f);
+      return;
+    }
     box.innerHTML = `<blockquote class="twitter-tweet" data-dnt="true"><a href="${esc(c.url)}"></a></blockquote>`;
     (await loadWidgets()).widgets.load(box);
   }
@@ -301,7 +317,7 @@ $("search").addEventListener("input", () => render(clips));
 $("addForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const url = normalizeUrl($("url").value);
-  if (!url) return alert("X の投稿URL（…/status/数字）を入力してください");
+  if (!url) return alert("X か Instagram の投稿URLを入力してください");
   if (clips.some((c) => c.url === url)) return alert("このクリップは保存済みです");
   await store.add({
     url,

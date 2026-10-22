@@ -12,6 +12,8 @@
   `firebase-config.js` が空だと端末のみ（localStorage）で動く。
 - 再生は X 公式の埋め込み（widgets.js）。動画ファイルはダウンロードせずリンクだけ保存する。
 - サムネイル・本文は FxTwitter（api.fxtwitter.com）から取得し、だめなら X の oEmbed（JSONP）で本文だけ取る。
+- Instagram の投稿・リールも保存できる（`normalizeUrl`）。再生は `<URL>embed/` の iframe（再生ボタンを押したときだけ読み込む）。
+  サムネイル・本文は自動取得できない（Meta の認証が必要なため）ので、カードは固定の文言になり、メモで補う。
 - iPhone のショートカット「クリップに保存」が `?url=<投稿URL>` 付きでアプリを開く。
   `?url=` 付きで開いたときだけ保存フォームを上に出し、普通に開いたときは一覧を上に出す。
 
