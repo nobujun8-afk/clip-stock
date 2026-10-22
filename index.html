@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>クリップストック</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#16a34a">
+<style>
+  :root { --bg:#f8fafc; --card:#fff; --text:#0f172a; --sub:#64748b; --line:#e2e8f0; --accent:#16a34a; --chip:#f1f5f9; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f172a; --card:#1e293b; --text:#f1f5f9; --sub:#94a3b8; --line:#334155; --chip:#334155; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:var(--accent); color:#fff; padding:calc(env(safe-area-inset-top) + 10px) 16px 10px; display:flex; align-items:center; gap:8px; }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  header button { background:rgba(255,255,255,.2); color:#fff; border:0; border-radius:8px; padding:6px 10px; font-size:13px; }
+  main { max-width:720px; margin:0 auto; padding:12px 16px 80px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px; }
+  input, select, textarea { width:100%; font-size:16px; padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  textarea { min-height:56px; }
+  label { display:block; font-size:12px; color:var(--sub); margin:8px 0 4px; }
+  .primary { width:100%; margin-top:10px; padding:11px; font-size:16px; font-weight:600; background:var(--accent); color:#fff; border:0; border-radius:8px; }
+  .chips { display:flex; gap:6px; overflow-x:auto; padding:2px 0 8px; }
+  .chip { flex:none; border:1px solid var(--line); background:var(--chip); color:var(--text); border-radius:999px; padding:6px 12px; font-size:14px; }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .clip .meta { font-size:12px; color:var(--sub); }
+  .clip .memo { margin:6px 0; white-space:pre-wrap; }
+  .badge { display:inline-block; font-size:12px; background:var(--chip); border-radius:6px; padding:2px 8px; margin-right:4px; }
+  .actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .actions button, .actions a { font-size:13px; border:1px solid var(--line); background:transparent; color:var(--text); border-radius:8px; padding:6px 10px; text-decoration:none; }
+  .watched { opacity:.6; }
+  .empty { text-align:center; color:var(--sub); padding:40px 0; }
+  .note { font-size:12px; color:var(--sub); }
+  .embed { margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚽ クリップストック</h1>
+  <span id="mode" class="note" style="color:#dcfce7"></span>
+  <button id="authBtn" hidden></button>
+</header>
+<main>
+  <form id="addForm" class="card">
+    <label for="url">X の投稿URL</label>
+    <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
+    <div class="row">
+      <div style="flex:1">
+        <label for="category">分類</label>
+        <select id="category"></select>
+      </div>
+      <div style="flex:1">
+        <label for="tags">タグ（スペース区切り）</label>
+        <input id="tags" placeholder="U-12 守備">
+      </div>
+    </div>
+    <label for="memo">メモ</label>
+    <textarea id="memo" placeholder="例：火曜の練習で使えそう"></textarea>
+    <button class="primary" type="submit">保存</button>
+  </form>
+
+  <input id="search" type="search" placeholder="メモ・タグで検索" style="margin-bottom:8px">
+  <div id="filters" class="chips"></div>
+  <div id="list"></div>
+</main>
+
+<script type="module">
+import { firebaseConfig } from "./firebase-config.js";
+
+const CATEGORIES = ["練習メニュー", "戦術", "個人技術", "身体操作", "その他"];
+const $ = (id) => document.getElementById(id);
+let clips = [];
+let filter = "すべて";
+let store;
+
+// ---- 保存先：Firebase（同期）または localStorage（この端末のみ） ----
+const localStore = {
+  key: "clipstock",
+  load() { try { return JSON.parse(localStorage.getItem(this.key)) || []; } catch { return []; } },
+  save(all) { try { localStorage.setItem(this.key, JSON.stringify(all)); } catch {} },
+  subscribe(cb) { cb(this.load()); },
+  async add(c) { const all = [{ id: crypto.randomUUID(), ...c }, ...this.load()]; this.save(all); render(clips = all); },
+  async update(id, patch) { const all = this.load().map((c) => c.id === id ? { ...c, ...patch } : c); this.save(all); render(clips = all); },
+  async remove(id) { const all = this.load().filter((c) => c.id !== id); this.save(all); render(clips = all); },
+};
+
+async function firebaseStore() {
+  const v = "10.12.2";
+  const { initializeApp } = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-app.js`);
+  const auth = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-auth.js`);
+  const fs = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`);
+  const app = initializeApp(firebaseConfig);
+  const a = auth.getAuth(app);
+  const db = fs.initializeFirestore(app, { localCache: fs.persistentLocalCache() });
+  let col, unsub;
+  const btn = $("authBtn");
+  btn.hidden = false;
+  return {
+    subscribe(cb) {
+      auth.onAuthStateChanged(a, (user) => {
+        unsub?.();
+        btn.textContent = user ? "ログアウト" : "Googleでログイン";
+        btn.onclick = () => user ? auth.signOut(a) : auth.signInWithPopup(a, new auth.GoogleAuthProvider());
+        if (!user) { col = null; cb([]); $("list").innerHTML = '<p class="empty">右上からログインすると、iPhone と PC で同期されます</p>'; return; }
+        col = fs.collection(db, "users", user.uid, "clips");
+        unsub = fs.onSnapshot(fs.query(col, fs.orderBy("createdAt", "desc")), (snap) =>
+          cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+      });
+    },
+    async add(c) { if (!col) return alert("先にログインしてください"); await fs.addDoc(col, c); },
+    async update(id, patch) { await fs.updateDoc(fs.doc(col, id), patch); },
+    async remove(id) { await fs.deleteDoc(fs.doc(col, id)); },
+  };
+}
+
+// ---- 画面 ----
+function normalizeUrl(raw) {
+  const m = String(raw).match(/https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/([^/?#]+)\/status\/(\d+)/);
+  return m ? `https://x.com/${m[1]}/status/${m[2]}` : null;
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+function renderFilters() {
+  const names = ["すべて", ...CATEGORIES, "未視聴"];
+  $("filters").innerHTML = names.map((n) => {
+    const count = n === "すべて" ? clips.length : n === "未視聴" ? clips.filter((c) => !c.watched).length : clips.filter((c) => c.category === n).length;
+    return `<button class="chip ${n === filter ? "on" : ""}" data-f="${n}">${n} ${count}</button>`;
+  }).join("");
+}
+
+function render(all) {
+  clips = all;
+  renderFilters();
+  const q = $("search").value.trim().toLowerCase();
+  const shown = clips.filter((c) =>
+    (filter === "すべて" || (filter === "未視聴" ? !c.watched : c.category === filter)) &&
+    (!q || `${c.memo} ${(c.tags || []).join(" ")} ${c.url}`.toLowerCase().includes(q)));
+  $("list").innerHTML = shown.length ? shown.map((c) => `
+    <div class="card clip ${c.watched ? "watched" : ""}" data-id="${c.id}">
+      <div><span class="badge">${esc(c.category)}</span>${(c.tags || []).map((t) => `<span class="badge">#${esc(t)}</span>`).join("")}</div>
+      ${c.memo ? `<div class="memo">${esc(c.memo)}</div>` : ""}
+      <div class="meta">${new Date(c.createdAt).toLocaleString("ja-JP")}${c.watched ? " ・ 視聴済み" : ""}</div>
+      <div class="actions">
+        <button data-act="play">▶ 再生</button>
+        <a href="${esc(c.url)}" target="_blank" rel="noopener">Xで開く</a>
+        <button data-act="watched">${c.watched ? "未視聴に戻す" : "視聴済みにする"}</button>
+        <button data-act="edit">メモ編集</button>
+        <button data-act="delete">削除</button>
+      </div>
+      <div class="embed"></div>
+    </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
+}
+
+function loadWidgets() {
+  if (window.twttr) return Promise.resolve(window.twttr);
+  return new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "https://platform.twitter.com/widgets.js";
+    s.onload = () => window.twttr.ready(resolve);
+    document.head.appendChild(s);
+  });
+}
+
+$("list").addEventListener("click", async (e) => {
+  const act = e.target.dataset.act;
+  const card = e.target.closest(".clip");
+  if (!act || !card) return;
+  const c = clips.find((x) => x.id === card.dataset.id);
+  if (act === "play") {
+    const box = card.querySelector(".embed");
+    if (box.childElementCount) { box.innerHTML = ""; return; }
+    box.innerHTML = `<blockquote class="twitter-tweet" data-dnt="true"><a href="${esc(c.url)}"></a></blockquote>`;
+    (await loadWidgets()).widgets.load(box);
+  }
+  if (act === "watched") await store.update(c.id, { watched: !c.watched });
+  if (act === "edit") {
+    const memo = prompt("メモ", c.memo || "");
+    if (memo !== null) await store.update(c.id, { memo });
+  }
+  if (act === "delete" && confirm("このクリップを削除しますか？")) await store.remove(c.id);
+});
+
+$("filters").addEventListener("click", (e) => {
+  if (e.target.dataset.f) { filter = e.target.dataset.f; render(clips); }
+});
+$("search").addEventListener("input", () => render(clips));
+
+$("addForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = normalizeUrl($("url").value);
+  if (!url) return alert("X の投稿URL（…/status/数字）を入力してください");
+  if (clips.some((c) => c.url === url)) return alert("このクリップは保存済みです");
+  await store.add({
+    url,
+    category: $("category").value,
+    tags: $("tags").value.split(/[\s　,、]+/).filter(Boolean),
+    memo: $("memo").value.trim(),
+    watched: false,
+    createdAt: Date.now(),
+  });
+  e.target.reset();
+  history.replaceState(null, "", location.pathname);
+});
+
+// ---- 起動 ----
+$("category").innerHTML = CATEGORIES.map((c) => `<option>${c}</option>`).join("");
+// iPhone のショートカットから ?url=... 付きで開かれたら入力欄に入れる
+const params = new URLSearchParams(location.search);
+const shared = params.get("url") || params.get("text");
+if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; $("memo").focus(); }
+
+const synced = Boolean(firebaseConfig.apiKey);
+$("mode").textContent = synced ? "同期モード" : "この端末のみ";
+store = synced ? await firebaseStore() : localStore;
+store.subscribe(render);
+</script>
+</body>
+</html>
