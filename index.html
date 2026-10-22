@@ -56,7 +56,8 @@
   <button id="authBtn" hidden></button>
 </header>
 <main>
-  <form id="addForm" class="card">
+  <button id="openForm" type="button" class="primary" style="margin:0 0 12px">＋ URL を貼ってクリップを追加</button>
+  <form id="addForm" class="card" hidden>
     <label for="url">X の投稿URL</label>
     <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
     <label>分類</label>
@@ -71,6 +72,7 @@
     <label for="memo">メモ</label>
     <textarea id="memo" placeholder="例：火曜の練習で使えそう"></textarea>
     <button class="primary" type="submit">保存</button>
+    <button id="closeForm" type="button" class="primary" style="background:transparent;color:var(--sub);font-weight:400;margin-top:4px">閉じる</button>
   </form>
 
   <input id="search" type="search" placeholder="メモ・タグ・投稿の本文で検索" style="margin-bottom:8px">
@@ -312,6 +314,7 @@ $("addForm").addEventListener("submit", async (e) => {
   e.target.reset();
   selectedCategory = CATEGORIES[0];
   renderCategoryButtons();
+  showForm(false);
   history.replaceState(null, "", location.pathname);
 });
 
@@ -320,7 +323,14 @@ renderCategoryButtons();
 // iPhone のショートカットから ?url=... 付きで開かれたら入力欄に入れる
 const params = new URLSearchParams(location.search);
 const shared = params.get("url") || params.get("text");
-if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; $("memo").focus(); }
+// 共有から開いたときは保存フォームを上に、普通に開いたときは一覧を上に出す
+function showForm(open) {
+  $("addForm").hidden = !open;
+  $("openForm").hidden = open;
+}
+$("closeForm").addEventListener("click", () => { showForm(false); history.replaceState(null, "", location.pathname); });
+$("openForm").addEventListener("click", () => { showForm(true); $("url").focus(); });
+if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; showForm(true); }
 
 const synced = Boolean(firebaseConfig.apiKey);
 $("mode").textContent = synced ? "同期モード" : "この端末のみ";
