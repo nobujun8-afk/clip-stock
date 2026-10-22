@@ -60,6 +60,7 @@
   <form id="addForm" class="card" hidden>
     <label for="url">X / Instagram の投稿URL</label>
     <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
+    <button type="button" id="pasteBtn" style="margin-top:8px">📋 コピーしたリンクを貼る</button>
     <label>分類</label>
     <div id="category" class="cats"></div>
     <div>
@@ -345,7 +346,23 @@ function showForm(open) {
   $("openForm").hidden = open;
 }
 $("closeForm").addEventListener("click", () => { showForm(false); history.replaceState(null, "", location.pathname); });
-$("openForm").addEventListener("click", () => { showForm(true); $("url").focus(); });
+// コピーしてあるリンク（X / Instagram）があれば入力欄に入れる。iPhone では「ペースト」の確認が出る
+async function pasteFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    const m = text.match(/https?:\/\/\S+/);
+    if (m && normalizeUrl(m[0])) { $("url").value = m[0]; return true; }
+  } catch {}
+  return false;
+}
+$("openForm").addEventListener("click", async () => {
+  showForm(true);
+  if (!$("url").value && (await pasteFromClipboard())) return;
+  $("url").focus();
+});
+$("pasteBtn").addEventListener("click", async () => {
+  if (!(await pasteFromClipboard())) alert("コピーしたリンクが見つかりませんでした。先に X か Instagram でリンクをコピーしてください");
+});
 if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; showForm(true); }
 
 const synced = Boolean(firebaseConfig.apiKey);
