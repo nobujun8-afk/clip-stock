@@ -58,7 +58,7 @@
 <main>
   <button id="openForm" type="button" class="primary" style="margin:0 0 12px">＋ URL を貼ってクリップを追加</button>
   <form id="addForm" class="card" hidden>
-    <label for="url">X / Instagram の投稿URL</label>
+    <label for="url">X / Instagram / YouTube のリンク</label>
     <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
     <button type="button" id="pasteBtn" style="margin-top:8px">📋 コピーしたリンクを貼る</button>
     <label>分類</label>
@@ -132,7 +132,15 @@ async function firebaseStore() {
 
 // ---- 画面 ----
 const isInstagram = (url) => url.includes("instagram.com/");
+// YouTube の動画 ID を取り出す（通常の動画・youtu.be の短縮・ショート・ライブ）
+function youtubeId(raw) {
+  const m = String(raw).match(/https?:\/\/(?:(?:www\.|m\.|music\.)?youtube\.com\/(?:watch\?(?:[^#\s]*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+const isYoutube = (url) => /youtube\.com\/|youtu\.be\//.test(url);
 function normalizeUrl(raw) {
+  const yt = youtubeId(raw);
+  if (yt) return `https://www.youtube.com/watch?v=${yt}`;
   // Instagram の投稿・リール（共有用の ?igsh= などは捨てて、投稿の ID だけ残す）
   const ig = String(raw).match(/https?:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(p|reel|reels|tv)\/([\w-]+)/);
   if (ig) return `https://www.instagram.com/${ig[1] === "p" ? "p" : "reel"}/${ig[2]}/`;
@@ -194,7 +202,7 @@ function render(all) {
       <div class="meta">${new Date(c.createdAt).toLocaleString("ja-JP")}${c.watched ? " ・ 視聴済み" : ""}</div>
       <div class="actions">
         <button data-act="play">▶ 再生</button>
-        <a href="${esc(c.url)}" target="_blank" rel="noopener">${isInstagram(c.url) ? "Instagramで開く" : "Xで開く"}</a>
+        <a href="${esc(c.url)}" target="_blank" rel="noopener">${isInstagram(c.url) ? "Instagramで開く" : isYoutube(c.url) ? "YouTubeで開く" : "Xで開く"}</a>
         <button data-act="watched">${c.watched ? "未視聴に戻す" : "視聴済みにする"}</button>
         <button data-act="cat">分類変更</button>
         <button data-act="tags">タグ編集</button>
@@ -221,7 +229,7 @@ function previewHtml(c) {
   return `<div class="preview" data-act="play">
       <div class="thumb" data-act="play" ${p.thumb ? `style="background-image:url('${esc(p.thumb)}')"` : ""}></div>
       <div data-act="play">
-        <div class="author" data-act="play">${esc(p.author)} <span>@${esc(p.handle)}</span></div>
+        <div class="author" data-act="play">${esc(p.author)}${p.handle ? ` <span>@${esc(p.handle)}</span>` : ""}</div>
         <div class="text" data-act="play">${esc(p.text) || "（本文なし）"}</div>
       </div>
     </div>`;
@@ -229,6 +237,17 @@ function previewHtml(c) {
 
 // まず FxTwitter（サムネイル付き）、だめなら X 公式の oEmbed（本文のみ）から取る
 async function fetchPreview(url) {
+  if (isYoutube(url)) {
+    // サムネイルは動画 ID から決まるので通信不要。タイトルと投稿者は YouTube の oEmbed で取る（だめならサムネイルだけ）
+    const id = youtubeId(url);
+    const p = { author: "YouTube", handle: "", text: "", thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg` };
+    try {
+      const d = await (await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`)).json();
+      p.text = (d.title || "").slice(0, 280);
+      p.author = d.author_name || p.author;
+    } catch {}
+    return p;
+  }
   const [, handle, id] = url.match(/x\.com\/([^/]+)\/status\/(\d+)/);
   try {
     const res = await fetch(`https://api.fxtwitter.com/${handle}/status/${id}`);
@@ -281,12 +300,13 @@ $("list").addEventListener("click", async (e) => {
   if (act === "play") {
     const box = card.querySelector(".embed");
     if (box.childElementCount) { box.innerHTML = ""; return; }
-    if (isInstagram(c.url)) {
+    if (isInstagram(c.url) || isYoutube(c.url)) {
       const f = document.createElement("iframe");
-      f.src = `${c.url}embed/`;
+      f.src = isYoutube(c.url) ? `https://www.youtube-nocookie.com/embed/${youtubeId(c.url)}?rel=0&playsinline=1` : `${c.url}embed/`;
+      f.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
       f.loading = "lazy";
       f.allowFullscreen = true;
-      f.style.cssText = "width:100%;height:600px;border:0;border-radius:8px;background:#fff";
+      f.style.cssText = `width:100%;${isYoutube(c.url) ? "aspect-ratio:16/9" : "height:600px"};border:0;border-radius:8px;background:#000`;
       box.appendChild(f);
       return;
     }
@@ -318,7 +338,7 @@ $("search").addEventListener("input", () => render(clips));
 $("addForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const url = normalizeUrl($("url").value);
-  if (!url) return alert("X か Instagram の投稿URLを入力してください");
+  if (!url) return alert("X・Instagram・YouTube のリンクを入力してください");
   if (clips.some((c) => c.url === url)) return alert("このクリップは保存済みです");
   await store.add({
     url,

@@ -14,6 +14,8 @@
 - サムネイル・本文は FxTwitter（api.fxtwitter.com）から取得し、だめなら X の oEmbed（JSONP）で本文だけ取る。
 - Instagram の投稿・リールも保存できる（`normalizeUrl`）。再生は `<URL>embed/` の iframe（再生ボタンを押したときだけ読み込む）。
   サムネイル・本文は自動取得できない（Meta の認証が必要なため）ので、カードは固定の文言になり、メモで補う。
+- YouTube（通常の動画・youtu.be・ショート）も保存できる（`youtubeId`）。URL は `watch?v=ID` に統一。
+  サムネイルは i.ytimg.com、タイトルは YouTube の oEmbed（だめならサムネイルだけ）。再生は youtube-nocookie.com の埋め込み。
 - iPhone のショートカット「クリップに保存」が `?url=<投稿URL>` 付きでアプリを開く。
   `?url=` 付きで開いたときだけ保存フォームを上に出し、普通に開いたときは一覧を上に出す。
 
