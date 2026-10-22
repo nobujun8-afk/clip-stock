@@ -15,6 +15,7 @@
     :root { --bg:#0f172a; --card:#1e293b; --text:#f1f5f9; --sub:#94a3b8; --line:#334155; --chip:#334155; }
   }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif; }
   header { position:sticky; top:0; z-index:5; background:var(--accent); color:#fff; padding:calc(env(safe-area-inset-top) + 10px) 16px 10px; display:flex; align-items:center; gap:8px; }
   header h1 { font-size:18px; margin:0; flex:1; }
@@ -28,6 +29,7 @@
   .chips { display:flex; gap:6px; overflow-x:auto; padding:2px 0 8px; }
   .chip { flex:none; border:1px solid var(--line); background:var(--chip); color:var(--text); border-radius:999px; padding:6px 12px; font-size:14px; }
   .cats { display:flex; flex-wrap:wrap; gap:6px; }
+  .catEdit { margin-top:8px; }
   .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .row { display:flex; gap:8px; align-items:center; }
   .clip .meta { font-size:12px; color:var(--sub); }
@@ -187,10 +189,13 @@ function render(all) {
         <button data-act="play">▶ 再生</button>
         <a href="${esc(c.url)}" target="_blank" rel="noopener">Xで開く</a>
         <button data-act="watched">${c.watched ? "未視聴に戻す" : "視聴済みにする"}</button>
+        <button data-act="cat">分類変更</button>
         <button data-act="tags">タグ編集</button>
         <button data-act="edit">メモ編集</button>
         <button data-act="delete">削除</button>
       </div>
+      <div class="cats catEdit" hidden>${CATEGORIES.map((n) =>
+        `<button type="button" class="chip ${n === c.category ? "on" : ""}" data-act="setcat" data-cat="${n}">${n}</button>`).join("")}</div>
       <div class="embed"></div>
     </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
   shown.filter((c) => !c.preview).forEach(backfillPreview);
@@ -270,6 +275,11 @@ $("list").addEventListener("click", async (e) => {
     (await loadWidgets()).widgets.load(box);
   }
   if (act === "watched") await store.update(c.id, { watched: !c.watched });
+  if (act === "cat") {
+    const box = card.querySelector(".catEdit");
+    box.hidden = !box.hidden;
+  }
+  if (act === "setcat" && e.target.dataset.cat !== c.category) await store.update(c.id, { category: e.target.dataset.cat });
   if (act === "tags") {
     const input = prompt("タグ（スペース区切り）", (c.tags || []).join(" "));
     if (input !== null) await store.update(c.id, { tags: parseTags(input) });
