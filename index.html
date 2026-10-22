@@ -217,7 +217,14 @@ if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; 
 
 const synced = Boolean(firebaseConfig.apiKey);
 $("mode").textContent = synced ? "同期モード" : "この端末のみ";
-store = synced ? await firebaseStore() : localStore;
+try {
+  store = synced ? await firebaseStore() : localStore;
+} catch (err) {
+  // 通信できずに同期の仕組みを読み込めなかったときは、この端末のみで動かす
+  console.error(err);
+  $("mode").textContent = "同期できません（この端末のみ）";
+  store = localStore;
+}
 store.subscribe(render);
 </script>
 </body>
