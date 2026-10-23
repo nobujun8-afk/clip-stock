@@ -213,17 +213,16 @@ function render(all) {
         `<button type="button" class="chip ${n === c.category ? "on" : ""}" data-act="setcat" data-cat="${n}">${n}</button>`).join("")}</div>
       <div class="embed"></div>
     </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
-  shown.filter((c) => !c.preview && !isInstagram(c.url)).forEach(backfillPreview);
+  shown.filter((c) => !c.preview).forEach(backfillPreview);
 }
 
 // ---- 投稿の中身（投稿者・本文・サムネイル）を取得 ----
 function previewHtml(c) {
-  if (isInstagram(c.url)) {
-    return `<div class="preview" data-act="play"><div class="thumb" data-act="play"></div><div class="text note" data-act="play">Instagram の投稿（▶で再生。内容はメモに書いておくと探しやすいです）</div></div>`;
-  }
   const p = c.preview;
   if (!p) {
-    const msg = previewFailed.has(c.id) ? "投稿の内容を取得できませんでした（▶で再生はできます）" : "投稿の内容を読み込み中…";
+    const msg = previewFailed.has(c.id)
+      ? (isInstagram(c.url) ? "Instagram の投稿（▶で再生。内容はメモに書いておくと探しやすいです）" : "投稿の内容を取得できませんでした（▶で再生はできます）")
+      : "投稿の内容を読み込み中…";
     return `<div class="preview" data-act="play"><div class="thumb" data-act="play"></div><div class="text note" data-act="play">${msg}</div></div>`;
   }
   return `<div class="preview" data-act="play">
@@ -237,6 +236,20 @@ function previewHtml(c) {
 
 // まず FxTwitter（サムネイル付き）、だめなら X 公式の oEmbed（本文のみ）から取る
 async function fetchPreview(url) {
+  if (isInstagram(url)) {
+    // Microlink（無料・キー不要）から投稿者・キャプション・サムネイルを取る
+    const res = await fetch(`https://api.microlink.io?url=${encodeURIComponent(url)}`);
+    const d = (await res.json())?.data;
+    if (!d || (!d.description && !d.image?.url)) throw new Error("microlink");
+    // description は「85 likes, 1 comments - handle on October 22, 2026: ”本文”.」の形。前置きと末尾を外してキャプションにする
+    const m = String(d.description || "").match(/^(?:[\d,]+ likes?, [\d,]+ comments? - )?(\S+) on [^:]+: ”([\s\S]*)”\.?$/);
+    return {
+      author: d.author || (m ? m[1] : "Instagram"),
+      handle: m ? m[1] : "",
+      text: (m ? m[2] : (d.title || "")).slice(0, 280),
+      thumb: d.image?.url || "",
+    };
+  }
   if (isYoutube(url)) {
     // サムネイルは動画 ID から決まるので通信不要。タイトルと投稿者は YouTube の oEmbed で取る（だめならサムネイルだけ）
     const id = youtubeId(url);
