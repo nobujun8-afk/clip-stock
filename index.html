@@ -38,6 +38,7 @@
   .actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
   .actions button, .actions a { font-size:13px; border:1px solid var(--line); background:transparent; color:var(--text); border-radius:8px; padding:6px 10px; text-decoration:none; }
   .watched { opacity:.6; }
+  .actions button.favOn { color:#f59e0b; border-color:#f59e0b; }
   .empty { text-align:center; color:var(--sub); padding:40px 0; }
   .note { font-size:12px; color:var(--sub); }
   .embed { margin-top:8px; }
@@ -60,6 +61,7 @@
   <form id="addForm" class="card" hidden>
     <label for="url">X / Instagram / YouTube のリンク</label>
     <input id="url" type="url" placeholder="https://x.com/.../status/..." required>
+    <div id="dupNote" class="note" style="color:#f59e0b;margin-top:6px" hidden></div>
     <button type="button" id="pasteBtn" style="margin-top:8px">📋 コピーしたリンクを貼る</button>
     <label>分類</label>
     <div id="category" class="cats"></div>
@@ -68,6 +70,10 @@
         <label for="tags">タグ（スペース区切り）</label>
         <input id="tags" placeholder="U-12 守備">
         <div id="tagSuggest" class="chips" style="padding-top:6px"></div>
+        <div id="autoTagBox" hidden>
+          <div class="note">投稿の内容からのおすすめ（押すと追加）</div>
+          <div id="autoTags" class="chips" style="padding-top:6px"></div>
+        </div>
       </div>
     </div>
     <label for="memo">メモ</label>
@@ -76,7 +82,14 @@
     <button id="closeForm" type="button" class="primary" style="background:transparent;color:var(--sub);font-weight:400;margin-top:4px">閉じる</button>
   </form>
 
-  <input id="search" type="search" placeholder="メモ・タグ・投稿の本文で検索" style="margin-bottom:8px">
+  <div class="row" style="margin-bottom:8px">
+    <input id="search" type="search" placeholder="メモ・タグ・投稿の本文で検索">
+    <select id="sort" style="width:auto;flex:none" aria-label="並び順">
+      <option value="new">新しい順</option>
+      <option value="old">古い順</option>
+      <option value="unwatched">未視聴を先に</option>
+    </select>
+  </div>
   <div id="filters" class="chips"></div>
   <div id="list"></div>
 </main>
@@ -147,6 +160,19 @@ function normalizeUrl(raw) {
   const m = String(raw).match(/https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/([^/?#]+)\/status\/(\d+)/);
   return m ? `https://x.com/${m[1]}/status/${m[2]}` : null;
 }
+// 同じ投稿かどうかの判定用（X はユーザー名が違っても投稿番号が同じなら同じ）
+function clipKey(url) {
+  const yt = youtubeId(url);
+  if (yt) return `yt:${yt}`;
+  const ig = String(url).match(/instagram\.com\/(?:p|reel)\/([\w-]+)/);
+  if (ig) return `ig:${ig[1]}`;
+  const x = String(url).match(/status\/(\d+)/);
+  return x ? `x:${x[1]}` : url;
+}
+const findDuplicate = (raw) => {
+  const url = normalizeUrl(raw);
+  return url ? clips.find((c) => clipKey(c.url) === clipKey(url)) : null;
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
 // ---- 分類ボタン・タグ候補（保存フォーム） ----
@@ -178,10 +204,72 @@ $("tagSuggest").addEventListener("click", (e) => {
 });
 $("tags").addEventListener("input", renderTagSuggest);
 
+// ---- 投稿の本文からタグの候補を作る（AI ではなく、サッカー用語の辞書で探す。無料・外部送信なし） ----
+const TAG_WORDS = {
+  "ビルドアップ": /ビルドアップ|build[- ]?up|salida de bal[oó]n|construcci[oó]n/i,
+  "プレス": /プレス|pressing|\bpress\b|presi[oó]n/i,
+  "守備": /守備|ディフェンス|defen[cs]e|defending|defensiv|defensa/i,
+  "攻撃": /攻撃|アタック|attack|ataque/i,
+  "カウンター": /カウンター|counter[- ]?attack|counter\b|contraataque/i,
+  "切り替え": /切り替え|切替|transition|transici[oó]n/i,
+  "セットプレー": /セットプレー|セットプレイ|set[- ]?pieces?|corner|コーナー|free[- ]?kick|フリーキック/i,
+  "ロンド": /ロンド|rondo/i,
+  "ポゼッション": /ポゼッション|possession|posesi[oó]n/i,
+  "GK": /ゴールキーパー|キーパー|goalkeep|\bGK\b|portero/i,
+  "ドリブル": /ドリブル|dribbl|regate/i,
+  "パス": /パス|passing|\bpass(?:es)?\b/i,
+  "シュート": /シュート|フィニッシュ|shooting|finishing|\bshots?\b/i,
+  "ハーフスペース": /ハーフスペース|half[- ]?space/i,
+  "1対1": /1対1|１対１|1v1|1 ?on ?1|1 ?vs ?1/i,
+  "トレーニング": /トレーニング|練習|drill|training|session|ejercicio|entrenamiento/i,
+  "ウォーミングアップ": /ウォーミングアップ|ウォームアップ|warm[- ]?up/i,
+  "フィジカル": /フィジカル|筋トレ|体幹|スプリント|physical|strength|sprint|agility/i,
+  "戦術": /戦術|tactic|t[aá]ctic/i,
+};
+function suggestTags(text) {
+  const found = Object.keys(TAG_WORDS).filter((t) => TAG_WORDS[t].test(text));
+  const formation = text.match(/\b[1-5]-[1-5](?:-[1-5]){1,3}\b/g) || [];  // 4-3-3 のようなフォーメーション
+  const hashtags = (text.match(/#[^\s#]{2,20}/g) || []).map((h) => h.slice(1));
+  return [...new Set([...found, ...formation, ...hashtags])].slice(0, 12);
+}
+let autoTagSource = "";
+function renderAutoTags() {
+  const current = parseTags($("tags").value);
+  const list = suggestTags(`${autoTagSource} ${$("memo").value}`).filter((t) => !current.includes(t));
+  $("autoTagBox").hidden = !list.length;
+  $("autoTags").innerHTML = list.map((t) => `<button type="button" class="chip" data-tag="${esc(t)}">＋${esc(t)}</button>`).join("");
+}
+$("autoTags").addEventListener("click", (e) => {
+  const t = e.target.dataset.tag;
+  if (!t) return;
+  $("tags").value = [...parseTags($("tags").value), t].join(" ");
+  renderTagSuggest();
+  renderAutoTags();
+});
+// リンクが入ったら投稿の内容を取ってきて、そこからタグの候補を出す（メモを書いたときも見る）
+let autoTagTimer, autoTagUrl = "";
+function updateAutoTags() {
+  clearTimeout(autoTagTimer);
+  autoTagTimer = setTimeout(async () => {
+    const url = normalizeUrl($("url").value);
+    if (url !== autoTagUrl) {
+      autoTagUrl = url || "";
+      autoTagSource = "";
+      if (url) {
+        try { const p = await fetchPreview(url); if (autoTagUrl === url) autoTagSource = `${p.author} ${p.text}`; } catch {}
+      }
+    }
+    renderAutoTags();
+  }, 500);
+}
+$("url").addEventListener("input", updateAutoTags);
+$("memo").addEventListener("input", () => { clearTimeout(autoTagTimer); autoTagTimer = setTimeout(renderAutoTags, 300); });
+$("tags").addEventListener("input", renderAutoTags);
+
 function renderFilters() {
-  const names = ["すべて", ...CATEGORIES, "未視聴"];
+  const names = ["すべて", "★お気に入り", ...CATEGORIES, "未視聴"];
   $("filters").innerHTML = names.map((n) => {
-    const count = n === "すべて" ? clips.length : n === "未視聴" ? clips.filter((c) => !c.watched).length : clips.filter((c) => c.category === n).length;
+    const count = n === "すべて" ? clips.length : n === "★お気に入り" ? clips.filter((c) => c.fav).length : n === "未視聴" ? clips.filter((c) => !c.watched).length : clips.filter((c) => c.category === n).length;
     return `<button class="chip ${n === filter ? "on" : ""}" data-f="${n}">${n} ${count}</button>`;
   }).join("");
 }
@@ -192,17 +280,23 @@ function render(all) {
   renderTagSuggest();
   const q = $("search").value.trim().toLowerCase();
   const shown = clips.filter((c) =>
-    (filter === "すべて" || (filter === "未視聴" ? !c.watched : c.category === filter)) &&
+    (filter === "すべて" || (filter === "★お気に入り" ? c.fav : filter === "未視聴" ? !c.watched : c.category === filter)) &&
     (!q || `${c.memo} ${(c.tags || []).join(" ")} ${c.url} ${c.preview?.author || ""} ${c.preview?.text || ""}`.toLowerCase().includes(q)));
+  const sortBy = $("sort").value;
+  shown.sort((a, b) =>
+    sortBy === "old" ? a.createdAt - b.createdAt
+    : sortBy === "unwatched" ? (Boolean(a.watched) - Boolean(b.watched)) || (b.createdAt - a.createdAt)
+    : b.createdAt - a.createdAt);
   $("list").innerHTML = shown.length ? shown.map((c) => `
     <div class="card clip ${c.watched ? "watched" : ""}" data-id="${c.id}">
-      <div><span class="badge">${esc(c.category)}</span>${(c.tags || []).map((t) => `<span class="badge">#${esc(t)}</span>`).join("")}</div>
+      <div>${c.fav ? '<span class="badge" style="color:#f59e0b">★</span>' : ""}<span class="badge">${esc(c.category)}</span>${(c.tags || []).map((t) => `<span class="badge">#${esc(t)}</span>`).join("")}</div>
       ${previewHtml(c)}
       ${c.memo ? `<div class="memo">${esc(c.memo)}</div>` : ""}
       <div class="meta">${new Date(c.createdAt).toLocaleString("ja-JP")}${c.watched ? " ・ 視聴済み" : ""}</div>
       <div class="actions">
         <button data-act="play">▶ 再生</button>
         <a href="${esc(c.url)}" target="_blank" rel="noopener">${isInstagram(c.url) ? "Instagramで開く" : isYoutube(c.url) ? "YouTubeで開く" : "Xで開く"}</a>
+        <button data-act="fav" class="${c.fav ? "favOn" : ""}">${c.fav ? "★ お気に入り" : "☆ お気に入り"}</button>
         <button data-act="watched">${c.watched ? "未視聴に戻す" : "視聴済みにする"}</button>
         <button data-act="cat">分類変更</button>
         <button data-act="tags">タグ編集</button>
@@ -214,6 +308,7 @@ function render(all) {
       <div class="embed"></div>
     </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
   shown.filter((c) => !c.preview).forEach(backfillPreview);
+  watchThumbs(shown);
 }
 
 // ---- 投稿の中身（投稿者・本文・サムネイル）を取得 ----
@@ -287,6 +382,49 @@ async function fetchPreview(url) {
   return { author: data.author_name || handle, handle, text: (doc.querySelector("p")?.textContent || "").slice(0, 280), thumb: "" };
 }
 
+// Instagram のサムネイルは数日〜数週間で見えなくなるので、読めなくなったものだけ取り直す
+// （画面に出たものだけ・1 回の起動で最大 REFRESH_MAX 件・1 件ずつ間を空ける・失敗したらその日は再挑戦しない）
+const REFRESH_MAX = 8;
+const thumbChecked = new Set();
+const refreshQueue = [];
+let refreshCount = 0;
+let refreshing = false;
+const refreshFailKey = (id) => `clipstock-thumbfail-${id}`;
+const failedToday = (id) => { try { return localStorage.getItem(refreshFailKey(id)) === new Date().toDateString(); } catch { return false; } };
+const markFailedToday = (id) => { try { localStorage.setItem(refreshFailKey(id), new Date().toDateString()); } catch {} };
+async function runRefreshQueue() {
+  if (refreshing) return;
+  refreshing = true;
+  while (refreshQueue.length && refreshCount < REFRESH_MAX) {
+    const c = refreshQueue.shift();
+    refreshCount++;
+    try {
+      const fresh = await fetchPreview(c.url);
+      if (!fresh.thumb) throw new Error("no thumb");
+      await store.update(c.id, { preview: { ...c.preview, ...fresh } });
+    } catch (err) { console.warn("thumb refresh", err); markFailedToday(c.id); }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  refreshing = false;
+}
+const thumbObserver = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
+  for (const en of entries) {
+    if (!en.isIntersecting) continue;
+    thumbObserver.unobserve(en.target);
+    const c = clips.find((x) => x.id === en.target.dataset.id);
+    if (!c?.preview?.thumb || thumbChecked.has(c.id) || failedToday(c.id)) continue;
+    thumbChecked.add(c.id);
+    const img = new Image();
+    img.onerror = () => { refreshQueue.push(c); runRefreshQueue(); };
+    img.src = c.preview.thumb;
+  }
+}) : null;
+function watchThumbs(list) {
+  if (!thumbObserver) return;
+  list.filter((c) => isInstagram(c.url) && c.preview?.thumb && !thumbChecked.has(c.id))
+    .forEach((c) => { const el = document.querySelector(`.clip[data-id="${c.id}"]`); if (el) thumbObserver.observe(el); });
+}
+
 const previewTried = new Set();
 const previewFailed = new Set();
 async function backfillPreview(c) {
@@ -326,6 +464,7 @@ $("list").addEventListener("click", async (e) => {
     box.innerHTML = `<blockquote class="twitter-tweet" data-dnt="true"><a href="${esc(c.url)}"></a></blockquote>`;
     (await loadWidgets()).widgets.load(box);
   }
+  if (act === "fav") await store.update(c.id, { fav: !c.fav });
   if (act === "watched") await store.update(c.id, { watched: !c.watched });
   if (act === "cat") {
     const box = card.querySelector(".catEdit");
@@ -347,12 +486,18 @@ $("filters").addEventListener("click", (e) => {
   if (e.target.dataset.f) { filter = e.target.dataset.f; render(clips); }
 });
 $("search").addEventListener("input", () => render(clips));
+try { $("sort").value = localStorage.getItem("clipstock-sort") || "new"; } catch {}
+$("sort").addEventListener("change", () => {
+  try { localStorage.setItem("clipstock-sort", $("sort").value); } catch {}
+  render(clips);
+});
 
 $("addForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const url = normalizeUrl($("url").value);
   if (!url) return alert("X・Instagram・YouTube のリンクを入力してください");
-  if (clips.some((c) => c.url === url)) return alert("このクリップは保存済みです");
+  const dup = findDuplicate(url);
+  if (dup) return alert(`このクリップは保存済みです（${dup.category}・${new Date(dup.createdAt).toLocaleDateString("ja-JP")}に保存）`);
   await store.add({
     url,
     category: selectedCategory,
@@ -362,6 +507,8 @@ $("addForm").addEventListener("submit", async (e) => {
     createdAt: Date.now(),
   });
   e.target.reset();
+  $("dupNote").hidden = true;
+  autoTagUrl = ""; autoTagSource = ""; renderAutoTags();
   selectedCategory = CATEGORIES[0];
   renderCategoryButtons();
   showForm(false);
@@ -384,7 +531,7 @@ async function pasteFromClipboard() {
   try {
     const text = await navigator.clipboard.readText();
     const m = text.match(/https?:\/\/\S+/);
-    if (m && normalizeUrl(m[0])) { $("url").value = m[0]; return true; }
+    if (m && normalizeUrl(m[0])) { $("url").value = m[0]; checkDuplicate(); updateAutoTags(); return true; }
   } catch {}
   return false;
 }
@@ -393,10 +540,16 @@ $("openForm").addEventListener("click", async () => {
   if (!$("url").value && (await pasteFromClipboard())) return;
   $("url").focus();
 });
+function checkDuplicate() {
+  const dup = findDuplicate($("url").value);
+  $("dupNote").hidden = !dup;
+  if (dup) $("dupNote").textContent = `⚠ すでに保存済みです（${dup.category}・${new Date(dup.createdAt).toLocaleDateString("ja-JP")}）`;
+}
+$("url").addEventListener("input", checkDuplicate);
 $("pasteBtn").addEventListener("click", async () => {
   if (!(await pasteFromClipboard())) alert("コピーしたリンクが見つかりませんでした。先に X か Instagram でリンクをコピーしてください");
 });
-if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; showForm(true); }
+if (shared) { $("url").value = (shared.match(/https?:\/\/\S+/) || [shared])[0]; showForm(true); updateAutoTags(); }
 
 const synced = Boolean(firebaseConfig.apiKey);
 $("mode").textContent = synced ? "同期モード" : "この端末のみ";
