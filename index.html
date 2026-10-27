@@ -30,6 +30,10 @@
   .chip { flex:none; border:1px solid var(--line); background:var(--chip); color:var(--text); border-radius:999px; padding:6px 12px; font-size:14px; }
   .cats { display:flex; flex-wrap:wrap; gap:6px; }
   .catEdit { margin-top:8px; }
+  textarea.tagArea { min-height:84px; line-height:1.5; resize:vertical; }
+  .tagEdit { margin-top:8px; }
+  .tagEdit .row button { flex:1; font-size:15px; padding:9px; border:1px solid var(--line); background:transparent; color:var(--text); border-radius:8px; }
+  .tagEdit .row button.save { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
   .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .row { display:flex; gap:8px; align-items:center; }
   .clip .meta { font-size:12px; color:var(--sub); }
@@ -67,8 +71,8 @@
     <div id="category" class="cats"></div>
     <div>
       <div>
-        <label for="tags">タグ（スペース区切り）</label>
-        <input id="tags" placeholder="U-12 守備">
+        <label for="tags">タグ（スペースか改行で区切る）</label>
+        <textarea id="tags" class="tagArea" rows="3" placeholder="U-12 守備 ビルドアップ（スペースか改行で区切る）"></textarea>
         <div id="tagSuggest" class="chips" style="padding-top:6px"></div>
         <div id="autoTagBox" hidden>
           <div class="note">投稿の内容からのおすすめ（押すと追加）</div>
@@ -97,7 +101,7 @@
 <script type="module">
 import { firebaseConfig } from "./firebase-config.js";
 
-const CATEGORIES = ["練習メニュー", "戦術", "個人技術", "身体操作", "その他"];
+const CATEGORIES = ["練習メニュー", "戦術", "個人技術", "身体操作", "セットプレー", "その他"];
 const $ = (id) => document.getElementById(id);
 let clips = [];
 let filter = "すべて";
@@ -188,13 +192,16 @@ $("category").addEventListener("click", (e) => {
 });
 
 // これまでに使ったタグを、よく使う順にボタンで出す（押すとタグ欄に追加）
-function renderTagSuggest() {
+function usedTagButtons(text, attrs = "") {
   const count = {};
   clips.forEach((c) => (c.tags || []).forEach((t) => { count[t] = (count[t] || 0) + 1; }));
-  const current = parseTags($("tags").value);
-  $("tagSuggest").innerHTML = Object.keys(count).filter((t) => !current.includes(t))
+  const current = parseTags(text);
+  return Object.keys(count).filter((t) => !current.includes(t))
     .sort((a, b) => count[b] - count[a]).slice(0, 15)
-    .map((t) => `<button type="button" class="chip" data-tag="${esc(t)}">#${esc(t)}</button>`).join("");
+    .map((t) => `<button type="button" class="chip" ${attrs} data-tag="${esc(t)}">#${esc(t)}</button>`).join("");
+}
+function renderTagSuggest() {
+  $("tagSuggest").innerHTML = usedTagButtons($("tags").value);
 }
 $("tagSuggest").addEventListener("click", (e) => {
   const t = e.target.dataset.tag;
@@ -302,6 +309,12 @@ function render(all) {
         <button data-act="tags">タグ編集</button>
         <button data-act="edit">メモ編集</button>
         <button data-act="delete">削除</button>
+      </div>
+      <div class="tagEdit" hidden>
+        <label>タグ（スペースか改行で区切る）</label>
+        <textarea class="tagArea tagInput" rows="3"></textarea>
+        <div class="chips tagEditSuggest" style="padding-top:6px"></div>
+        <div class="row"><button type="button" data-act="tagcancel">やめる</button><button type="button" class="save" data-act="tagsave">タグを保存</button></div>
       </div>
       <div class="cats catEdit" hidden>${CATEGORIES.map((n) =>
         `<button type="button" class="chip ${n === c.category ? "on" : ""}" data-act="setcat" data-cat="${n}">${n}</button>`).join("")}</div>
@@ -471,10 +484,25 @@ $("list").addEventListener("click", async (e) => {
     box.hidden = !box.hidden;
   }
   if (act === "setcat" && e.target.dataset.cat !== c.category) await store.update(c.id, { category: e.target.dataset.cat });
+  // タグ編集：カードの中に大きめの入力欄とよく使うタグのボタンを出す
+  const tagBox = card.querySelector(".tagEdit");
+  const tagInput = tagBox.querySelector(".tagInput");
+  const fillTagSuggest = () => { tagBox.querySelector(".tagEditSuggest").innerHTML = usedTagButtons(tagInput.value, 'data-act="tagadd"'); };
   if (act === "tags") {
-    const input = prompt("タグ（スペース区切り）", (c.tags || []).join(" "));
-    if (input !== null) await store.update(c.id, { tags: parseTags(input) });
+    tagBox.hidden = !tagBox.hidden;
+    if (!tagBox.hidden) {
+      tagInput.value = (c.tags || []).join(" ");
+      fillTagSuggest();
+      tagInput.oninput = fillTagSuggest;
+      tagInput.focus();
+    }
   }
+  if (act === "tagadd") {
+    tagInput.value = [...parseTags(tagInput.value), e.target.dataset.tag].join(" ");
+    fillTagSuggest();
+  }
+  if (act === "tagcancel") tagBox.hidden = true;
+  if (act === "tagsave") await store.update(c.id, { tags: parseTags(tagInput.value) });
   if (act === "edit") {
     const memo = prompt("メモ", c.memo || "");
     if (memo !== null) await store.update(c.id, { memo });
