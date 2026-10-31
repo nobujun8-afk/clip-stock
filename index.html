@@ -30,6 +30,10 @@
   .chip { flex:none; border:1px solid var(--line); background:var(--chip); color:var(--text); border-radius:999px; padding:6px 12px; font-size:14px; }
   .cats { display:flex; flex-wrap:wrap; gap:6px; }
   .catEdit { margin-top:8px; }
+  .checkHead { font-size:14px; font-weight:600; color:#f59e0b; margin:4px 0 8px; }
+  .checkHead.rest { color:var(--sub); margin-top:16px; }
+  .checkInfo { margin-top:4px; }
+  .checkBadge { color:#f59e0b; border:1px solid #f59e0b; background:transparent; }
   textarea.tagArea { min-height:84px; line-height:1.5; resize:vertical; }
   .tagEdit { margin-top:8px; }
   .tagEdit .row button { flex:1; font-size:15px; padding:9px; border:1px solid var(--line); background:transparent; color:var(--text); border-radius:8px; }
@@ -273,10 +277,14 @@ $("url").addEventListener("input", updateAutoTags);
 $("memo").addEventListener("input", () => { clearTimeout(autoTagTimer); autoTagTimer = setTimeout(renderAutoTags, 300); });
 $("tags").addEventListener("input", renderAutoTags);
 
+// タグが 2 個以下のクリップは「要チェック」（保存時に急いでいて、まだ見返せていないもの）
+const needsCheck = (c) => (c.tags || []).length <= 2;
+const daysSince = (t) => Math.floor((Date.now() - t) / 86400000);
+
 function renderFilters() {
-  const names = ["すべて", "★お気に入り", ...CATEGORIES, "未視聴"];
+  const names = ["すべて", "★お気に入り", "要チェック", ...CATEGORIES, "未視聴"];
   $("filters").innerHTML = names.map((n) => {
-    const count = n === "すべて" ? clips.length : n === "★お気に入り" ? clips.filter((c) => c.fav).length : n === "未視聴" ? clips.filter((c) => !c.watched).length : clips.filter((c) => c.category === n).length;
+    const count = n === "すべて" ? clips.length : n === "★お気に入り" ? clips.filter((c) => c.fav).length : n === "要チェック" ? clips.filter(needsCheck).length : n === "未視聴" ? clips.filter((c) => !c.watched).length : clips.filter((c) => c.category === n).length;
     return `<button class="chip ${n === filter ? "on" : ""}" data-f="${n}">${n} ${count}</button>`;
   }).join("");
 }
@@ -287,19 +295,31 @@ function render(all) {
   renderTagSuggest();
   const q = $("search").value.trim().toLowerCase();
   const shown = clips.filter((c) =>
-    (filter === "すべて" || (filter === "★お気に入り" ? c.fav : filter === "未視聴" ? !c.watched : c.category === filter)) &&
+    (filter === "すべて" || (filter === "★お気に入り" ? c.fav : filter === "要チェック" ? needsCheck(c) : filter === "未視聴" ? !c.watched : c.category === filter)) &&
     (!q || `${c.memo} ${(c.tags || []).join(" ")} ${c.url} ${c.preview?.author || ""} ${c.preview?.text || ""}`.toLowerCase().includes(q)));
   const sortBy = $("sort").value;
   shown.sort((a, b) =>
     sortBy === "old" ? a.createdAt - b.createdAt
     : sortBy === "unwatched" ? (Boolean(a.watched) - Boolean(b.watched)) || (b.createdAt - a.createdAt)
     : b.createdAt - a.createdAt);
-  $("list").innerHTML = shown.length ? shown.map((c) => `
+  // 「すべて」で検索していないときは、要チェックのクリップを上にまとめて出す（下の一覧には重複して出さない）
+  const check = filter === "すべて" && !q ? shown.filter(needsCheck).sort((a, b) => b.createdAt - a.createdAt) : [];
+  const rest = check.length ? shown.filter((c) => !needsCheck(c)) : shown;
+  $("list").innerHTML = !shown.length ? '<p class="empty">まだクリップがありません</p>'
+    : (check.length ? `<div class="checkHead">要チェック（タグ2個以下） ${check.length}件</div>${check.map(clipHtml).join("")}${rest.length ? '<div class="checkHead rest">ほかのクリップ</div>' : ""}` : "")
+      + rest.map(clipHtml).join("");
+  shown.filter((c) => !c.preview).forEach(backfillPreview);
+  watchThumbs(shown);
+}
+
+function clipHtml(c) {
+  return `
     <div class="card clip ${c.watched ? "watched" : ""}" data-id="${c.id}">
       <div>${c.fav ? '<span class="badge" style="color:#f59e0b">★</span>' : ""}<span class="badge">${esc(c.category)}</span>${(c.tags || []).map((t) => `<span class="badge">#${esc(t)}</span>`).join("")}</div>
       ${previewHtml(c)}
       ${c.memo ? `<div class="memo">${esc(c.memo)}</div>` : ""}
       <div class="meta">${new Date(c.createdAt).toLocaleString("ja-JP")}${c.watched ? " ・ 視聴済み" : ""}</div>
+      ${needsCheck(c) ? `<div class="checkInfo"><span class="badge checkBadge">タグ${(c.tags || []).length}個</span><span class="note">${daysSince(c.createdAt) ? `保存から${daysSince(c.createdAt)}日` : "今日保存"}</span></div>` : ""}
       <div class="actions">
         <button data-act="play">▶ 再生</button>
         <a href="${esc(c.url)}" target="_blank" rel="noopener">${isInstagram(c.url) ? "Instagramで開く" : isYoutube(c.url) ? "YouTubeで開く" : "Xで開く"}</a>
@@ -319,9 +339,7 @@ function render(all) {
       <div class="cats catEdit" hidden>${CATEGORIES.map((n) =>
         `<button type="button" class="chip ${n === c.category ? "on" : ""}" data-act="setcat" data-cat="${n}">${n}</button>`).join("")}</div>
       <div class="embed"></div>
-    </div>`).join("") : '<p class="empty">まだクリップがありません</p>';
-  shown.filter((c) => !c.preview).forEach(backfillPreview);
-  watchThumbs(shown);
+    </div>`;
 }
 
 // ---- 投稿の中身（投稿者・本文・サムネイル）を取得 ----
